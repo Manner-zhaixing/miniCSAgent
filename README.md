@@ -1,56 +1,57 @@
 # Mini CS Agent
 
-A minimal LangGraph + FastAPI agent demo powered by DeepSeek.
+一个基于 LangGraph + FastAPI 的极简 AI Agent 示例，由 DeepSeek 驱动。
 
-## Project Structure
+## 项目结构
 
-```
+```text
 src/mini_cs_agent/
-├── main.py          # FastAPI app factory
+├── main.py          # FastAPI 应用工厂
 ├── api/
 │   ├── routes.py    # POST /api/v1/chat, GET /api/v1/health
 │   └── schemas.py   # ChatRequest, ChatResponse
 └── core/
-    ├── agent.py     # LangGraph agent (StateGraph)
-    └── config.py    # Read .env config
+    ├── agent.py     # LangGraph Agent (StateGraph)
+    └── config.py    # 读取 .env 配置
 ```
 
-## Quick Start
+## 快速开始
 
-### Prerequisites
+### 前置条件
 
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
-- DeepSeek API key
+- DeepSeek API Key
 
-### Setup
+### 安装
 
 ```bash
-# 1. Install dependencies
+# 1. 安装依赖
 uv sync
 
-# 2. Configure your API key
+# 2. 配置 API Key
 cp .env.example .env
-# Edit .env and fill in your DEEPSEEK_API_KEY
+# 编辑 .env，填入你的 DEEPSEEK_API_KEY
 
-# 3. Start the server
+# 3. 启动服务
 uv run uvicorn mini_cs_agent.main:create_app --factory --reload --port 8000
 ```
 
-### Usage
+### 使用
 
 ```bash
-# Health check
+# 健康检查
 curl http://localhost:8000/api/v1/health
 
-# Send a message
+# 发送消息
 curl -X POST http://localhost:8000/api/v1/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "Hello, how are you?"}'
+  -d '{"message": "你好，最近怎么样？"}'
 ```
 
-### API Docs
+### API 文档
 
-Once the server is running, visit:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+启动服务后访问：
+
+- Swagger UI: <http://localhost:8000/docs>
+- ReDoc: <http://localhost:8000/redoc>
