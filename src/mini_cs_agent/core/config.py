@@ -32,5 +32,5 @@ def load_config() -> Config:
     return Config(
         DEEPSEEK_API_KEY=api_key,
         DEEPSEEK_BASE_URL=values.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        MODEL_NAME=values.get("MODEL_NAME", "deepseek-chat"),
+        MODEL_NAME=values.get("MODEL_NAME", "deepseek-v4-pro"),
     )
