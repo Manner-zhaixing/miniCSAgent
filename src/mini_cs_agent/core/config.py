@@ -6,13 +6,16 @@ from dotenv import dotenv_values
 
 @dataclass
 class Config:
-    """读取项目根目录 .env 文件，只从文件读取，不读环境变量。"""
+    """读取项目根目录 .env 文件配置。"""
     DEEPSEEK_API_KEY: str
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     MODEL_NAME: str = "deepseek-chat"
+    EXA_API_KEY: str = ""
+    ENABLE_THINKING: bool = True  # 启用 DeepSeek 深度思考（reasoning_content）
 
 
 def load_config() -> Config:
+    """从项目根目录 .env 文件加载配置。"""
     # src/mini_cs_agent/core/config.py -> 往上 4 层到项目根
     root = Path(__file__).resolve().parent.parent.parent.parent
     env_file = root / ".env"
@@ -32,5 +35,7 @@ def load_config() -> Config:
     return Config(
         DEEPSEEK_API_KEY=api_key,
         DEEPSEEK_BASE_URL=values.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        MODEL_NAME=values.get("MODEL_NAME", "deepseek-v4-pro"),
+        MODEL_NAME=values.get("MODEL_NAME", "deepseek-chat"),
+        EXA_API_KEY=values.get("EXA_API_KEY", ""),
+        ENABLE_THINKING=values.get("ENABLE_THINKING", "true").lower() not in ("false", "0", "no"),
     )

@@ -17,28 +17,47 @@ uv run python main.py
 # 健康检查
 curl http://localhost:8000/api/v1/health
 
-# 发送消息
-curl -X POST http://localhost:8000/api/v1/chat \
+# 非流式消息（JSON 返回）
+curl -X POST 'http://localhost:8000/api/v1/chat?stream=false' \
   -H "Content-Type: application/json" \
   -d '{"message": "Hello"}'
+
+# 流式消息（SSE，默认模式）
+curl -N -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "搜索最新的 AI 新闻"}'
 ```
 
 目前尚未配置测试和 lint 工具。
 
 ## 架构
 
-这是一个极简的 LangGraph + FastAPI Agent 示例项目。入口是 [src/mini_cs_agent/main.py](src/mini_cs_agent/main.py) 中的 `create_app()` —— 一个应用工厂函数，负责将配置、LangGraph Agent 和路由组装在一起。
+这是一个基于 LangChain `create_agent` + FastAPI 的 ReAct Agent 项目，由 DeepSeek 驱动，集成 Exa AI 联网搜索。
+
+入口是 [src/mini_cs_agent/main.py](src/mini_cs_agent/main.py) 中的 `create_app()` —— 一个应用工厂函数，负责将配置、Agent 和路由组装在一起。
 
 ### 请求流程
 
 1. FastAPI 接收 `POST /api/v1/chat`，请求体为 `{"message": "..."}`。
-2. [routes.py](src/mini_cs_agent/api/routes.py) 将消息传递给 `Agent.run()`。
-3. [agent.py](src/mini_cs_agent/core/agent.py) 构建了一个单节点的 LangGraph `StateGraph`：`call_model` 节点调用 LLM（DeepSeek，通过 `langchain-openai` 的 `ChatOpenAI`），返回回复。
-4. 回复被包装为 `ChatResponse` 返回。
+2. [routes.py](src/mini_cs_agent/api/routes.py) 根据 `?stream=` 参数选择模式：
+   - 流式（默认）：调用 `Agent.stream()`，通过 SSE 逐 token 推送回复
+   - 非流式（`?stream=false`）：调用 `Agent.run()`，返回完整 JSON
+3. [agent.py](src/mini_cs_agent/core/agent.py) 使用 `langchain.agents.create_agent()` 创建 ReAct Agent。Agent 基于 system_prompt 和工具列表自主决定是否需要调用工具。
+4. 工具执行结果返回 LLM 综合后，回复通过路由返回给客户端。
 
 ### 配置加载
 
-[config.py](src/mini_cs_agent/core/config.py) **仅**从项目根目录的 `.env` 文件读取配置（不读系统环境变量）。必填字段：`DEEPSEEK_API_KEY`。可选字段：`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、`MODEL_NAME`（默认 `deepseek-chat`）。配置 dataclass 传入 `Agent`，用于初始化 `ChatOpenAI`。
+[config.py](src/mini_cs_agent/core/config.py) **仅**从项目根目录的 `.env` 文件读取配置（不读系统环境变量）。必填字段：`DEEPSEEK_API_KEY`。可选字段：`DEEPSEEK_BASE_URL`（默认 `https://api.deepseek.com`）、`MODEL_NAME`（默认 `deepseek-chat`）、`EXA_API_KEY`（Exa 搜索 API Key，获取地址：https://dashboard.exa.ai）。
+
+### 工具
+
+- `web_search` ([tools/web_search.py](src/mini_cs_agent/core/tools/web_search.py)) —— Exa AI 搜索工具，支持 auto 模式搜索和 highlights 摘要提取。
+
+新工具添加到 [tools/__init__.py](src/mini_cs_agent/core/tools/__init__.py) 的 `ALL_TOOLS` 列表中即可注册。
+
+### 系统提示词
+
+系统提示词独立存放在 [prompts/](src/mini_cs_agent/core/prompts/) 目录中，当前包含 `agent_system.py`。
 
 ### 路由中的 Agent 注入
 
@@ -50,7 +69,7 @@ curl -X POST http://localhost:8000/api/v1/chat \
 - `src/mini_cs_agent/` —— 可安装的 Python 包（构建后端：hatchling）。
   - `main.py` —— 应用工厂。
   - `api/` —— FastAPI 路由和 Pydantic 数据模型。
-  - `core/` —— 配置加载和 LangGraph Agent。
+  - `core/` —— 配置、Agent、工具和提示词。
 
 ## 文档同步规则
 
