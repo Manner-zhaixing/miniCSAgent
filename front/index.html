@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini CS Agent</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f5; color: #333; height: 100dvh; display: flex; flex-direction: column;
+  }
+  header {
+    background: #1a1a2e; color: #fff; padding: 12px 20px; font-size: 16px;
+    font-weight: 600; display: flex; align-items: center; gap: 8px;
+  }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; }
+  #chat {
+    flex: 1; overflow-y: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .msg { display: flex; gap: 8px; max-width: 85%; }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.agent { align-self: flex-start; }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+  }
+  .msg.user .avatar { background: #3b82f6; color: #fff; }
+  .msg.agent .avatar { background: #1a1a2e; color: #fff; }
+  .bubble {
+    background: #fff; border-radius: 12px; padding: 10px 14px; line-height: 1.6;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08); word-break: break-word;
+  }
+  .msg.user .bubble { background: #3b82f6; color: #fff; }
+  .thinking {
+    margin-bottom: 8px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;
+  }
+  .thinking summary {
+    padding: 6px 10px; cursor: pointer; font-size: 12px; color: #6b7280;
+    background: #f9fafb; user-select: none;
+  }
+  .thinking .body {
+    padding: 8px 10px; font-size: 13px; color: #6b7280; max-height: 200px; overflow-y: auto;
+    white-space: pre-wrap; line-height: 1.5; border-top: 1px solid #e5e7eb;
+  }
+  .tool-badge {
+    display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 4px;
+    margin: 4px 0;
+  }
+  .tool-badge.start { background: #fef3c7; color: #92400e; }
+  .tool-badge.end   { background: #d1fae5; color: #065f46; }
+  .tool-output {
+    font-size: 12px; color: #6b7280; margin-top: 2px; max-height: 120px; overflow-y: auto;
+    white-space: pre-wrap; border-left: 2px solid #d1d5db; padding-left: 8px;
+  }
+  footer {
+    padding: 12px 16px; background: #fff; border-top: 1px solid #e5e7eb;
+    display: flex; gap: 8px;
+  }
+  footer input {
+    flex: 1; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px 14px;
+    font-size: 14px; outline: none; transition: border-color .2s;
+  }
+  footer input:focus { border-color: #3b82f6; }
+  footer button {
+    background: #3b82f6; color: #fff; border: none; border-radius: 8px;
+    padding: 10px 18px; font-size: 14px; cursor: pointer; font-weight: 500;
+    transition: background .2s;
+  }
+  footer button:hover { background: #2563eb; }
+  footer button:disabled { background: #93c5fd; cursor: not-allowed; }
+  .empty { text-align: center; color: #9ca3af; margin-top: 60px; font-size: 14px; }
+  .typing { display: inline-block; width: 6px; height: 14px; background: #3b82f6;
+    animation: blink .6s infinite; vertical-align: middle; margin-left: 2px; }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<header><span class="dot"></span> Mini CS Agent</header>
+<div id="chat"><div class="empty">👋 输入消息开始对话</div></div>
+<footer>
+  <input id="input" type="text" placeholder="输入消息…" autofocus>
+  <button id="send" onclick="send()">发送</button>
+</footer>
+
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+let sending = false;
+
+input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+async function send() {
+  const text = input.value.trim();
+  if (!text || sending) return;
+  sending = true;
+  input.value = '';
+  sendBtn.disabled = true;
+
+  removeEmpty();
+  addUserMsg(text);
+  const agentEl = addAgentMsg();
+
+  let reasoningEl = null;    // 当前活跃的思考块 DOM
+  let tokenEl = null;        // 正文文本块 DOM
+  // rAF 批量渲染
+  let reasonBuf = '';
+  let tokenBuf = '';
+  let rafId = null;
+  let needScroll = false;
+  // 过滤：深度思考模式下，第一个 tool call 之前的 token 可能是推理复述，需缓冲
+  let hasReasoning = false;  // 当前轮是否已有 reasoning
+  let hasToolCall = false;   // 是否已经历过工具调用
+  let preToolTokens = '';    // 工具调用前缓冲的 token（可能需丢弃）
+
+  function flushDOM() {
+    if (reasoningEl && reasonBuf) {
+      reasoningEl.querySelector('.body').textContent += reasonBuf;
+      reasonBuf = '';
+    }
+    if (tokenEl && tokenBuf) {
+      tokenEl.textContent += tokenBuf;
+      tokenBuf = '';
+    }
+    if (needScroll) {
+      chat.scrollTop = chat.scrollHeight;
+      needScroll = false;
+    }
+    rafId = null;
+  }
+
+  function scheduleFlush() {
+    if (!rafId) rafId = requestAnimationFrame(flushDOM);
+  }
+
+  try {
+    const resp = await fetch('/api/v1/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      const lines = buf.split('\n');
+      buf = lines.pop(); // keep incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+        let event;
+        try { event = JSON.parse(data); } catch { continue; }
+
+        switch (event.type) {
+          case 'reasoning':
+            if (!reasoningEl) {
+              reasoningEl = addThinking(agentEl);
+            }
+            hasReasoning = true;
+            reasonBuf += event.content;
+            scheduleFlush();
+            break;
+          case 'token':
+            if (!hasToolCall && hasReasoning) {
+              // 工具调用前出现了 reasoning，当前 token 可能是推理复述 → 缓冲不渲染
+              preToolTokens += event.content;
+            } else {
+              // 没有 reasoning 或已过工具调用阶段 → 正常渲染
+              if (!tokenEl) {
+                tokenEl = addTokenArea(agentEl);
+              }
+              tokenBuf += event.content;
+              needScroll = true;
+              scheduleFlush();
+            }
+            break;
+          case 'tool_start':
+            // 工具调用出现 → 丢弃之前缓冲的 token（推理复述），关闭当前思考块
+            preToolTokens = '';
+            hasReasoning = false;
+            hasToolCall = true;
+            reasoningEl = null;
+            addToolBadge(agentEl, 'start', `🔍 调用 ${event.name}(${JSON.stringify(event.input).slice(0, 80)}…)`);
+            needScroll = true;
+            break;
+          case 'tool_end':
+            addToolBadge(agentEl, 'end', `✅ ${event.name} 完成`);
+            needScroll = true;
+            if (event.output) {
+              const details = document.createElement('details');
+              details.className = 'thinking';
+              details.innerHTML = '<summary>📋 查看结果</summary><div class="body"></div>';
+              details.querySelector('.body').textContent = event.output.slice(0, 2000);
+              agentEl.querySelector('.bubble').appendChild(details);
+            }
+            break;
+          case 'done':
+            // 无工具调用的直接回答：缓冲的 token 是最终回复，正常渲染
+            if (preToolTokens) {
+              if (!tokenEl) tokenEl = addTokenArea(agentEl);
+              tokenBuf += preToolTokens;
+              preToolTokens = '';
+            }
+            // flush 剩余 buffer，移除打字光标
+            if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+            flushDOM();
+            const bubble = agentEl.querySelector('.bubble');
+            const cursor = bubble.querySelector('.typing');
+            if (cursor) cursor.remove();
+            break;
+        }
+      }
+      // 每批数据处理完后至少滚一次
+      if (needScroll) { chat.scrollTop = chat.scrollHeight; needScroll = false; }
+    }
+  } catch (err) {
+    const bubble = agentEl.querySelector('.bubble');
+    const errEl = document.createElement('div');
+    errEl.style.cssText = 'color:#ef4444;font-size:13px;margin-top:4px;';
+    errEl.textContent = '请求失败: ' + err.message;
+    bubble.appendChild(errEl);
+  }
+  sending = false;
+  sendBtn.disabled = false;
+  input.focus();
+}
+
+function removeEmpty() {
+  const el = chat.querySelector('.empty');
+  if (el) el.remove();
+}
+
+function addUserMsg(text) {
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.innerHTML = `<div class="avatar">U</div><div class="bubble">${escapeHtml(text)}</div>`;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function addAgentMsg() {
+  const div = document.createElement('div');
+  div.className = 'msg agent';
+  div.innerHTML = `<div class="avatar">AI</div><div class="bubble"><span class="typing"></span></div>`;
+  chat.appendChild(div);
+  return div;
+}
+
+function addThinking(parent) {
+  const bubble = parent.querySelector('.bubble');
+  const details = document.createElement('details');
+  details.className = 'thinking';
+  details.open = true;
+  details.innerHTML = '<summary>🧠 深度思考</summary><div class="body"></div>';
+  bubble.appendChild(details);
+  return details;
+}
+
+function addTokenArea(parent) {
+  const bubble = parent.querySelector('.bubble');
+  // remove typing indicator
+  const cursor = bubble.querySelector('.typing');
+  if (cursor) cursor.remove();
+
+  const div = document.createElement('div');
+  div.style.whiteSpace = 'pre-wrap';
+  bubble.appendChild(div);
+  return div;
+}
+
+function addToolBadge(parent, cls, text) {
+  const bubble = parent.querySelector('.bubble');
+  const span = document.createElement('span');
+  span.className = 'tool-badge ' + cls;
+  span.textContent = text;
+  bubble.appendChild(span);
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>

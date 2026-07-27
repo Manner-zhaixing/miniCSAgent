@@ -54,7 +54,7 @@ class Agent:
         return ""
 
     async def stream(self, message: str) -> AsyncIterator[dict]:
-        """流式调用：逐事件 yield，覆盖 ReAct 完整过程（含深度思考）。
+        """流式调用：逐事件 yield，不做过滤，直接透传。
 
         yield 的事件格式：
           {"type": "reasoning",  "content": "..."}         — 模型深度思考（CoT）
@@ -63,14 +63,10 @@ class Agent:
           {"type": "tool_end",   "name": "...", "output": "..."} — 工具结束
           {"type": "done"}
 
-        深度思考模式下，推理内容实时输出；同一轮中的正文 token 会被缓冲：
-        - 若随后触发工具调用 → 丢弃缓冲（正文只是推理的冗余复述）
-        - 若本轮未触发工具调用 → 正常输出缓冲的正文（最终回答）
+        注意：深度思考模式下，工具调用前可能出现冗余正文（CoT 的复述），
+        由前端根据后续是否出现 tool_start 来决定是否丢弃。
         """
         import json
-
-        content_buffer: list[dict] = []  # 当前轮缓冲的 token 事件
-        has_reasoning = False            # 当前轮是否出现了 reasoning_content
 
         async for event in self.agent.astream_events(
             {"messages": [("user", message)]},
@@ -78,35 +74,18 @@ class Agent:
         ):
             kind = event.get("event", "")
 
-            if kind == "on_chat_model_start":
-                # 新一轮开始 → 上一轮未触发工具调用，正常输出缓冲的正文
-                for evt in content_buffer:
-                    yield evt
-                content_buffer = []
-                has_reasoning = False
-
-            elif kind == "on_chat_model_stream":
+            if kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
                 if chunk is None:
                     continue
-                # 深度思考内容（ChatDeepSeek 原生映射到 additional_kwargs）
                 reasoning = chunk.additional_kwargs.get("reasoning_content", "")
                 content = getattr(chunk, "content", "")
                 if reasoning:
-                    has_reasoning = True
                     yield {"type": "reasoning", "content": reasoning}
                 elif content:
-                    if has_reasoning:
-                        # 深度思考模式下，正文需缓冲（可能是工具调用前的冗余复述）
-                        content_buffer.append({"type": "token", "content": content})
-                    else:
-                        yield {"type": "token", "content": content}
+                    yield {"type": "token", "content": content}
 
             elif kind == "on_tool_start":
-                # 工具调用开始 → 丢弃缓冲的正文（推理已覆盖），只保留 reasoning
-                content_buffer = []
-                has_reasoning = False
-
                 name = event.get("name", "unknown")
                 tool_input = event.get("data", {}).get("input", {})
                 try:
@@ -123,9 +102,5 @@ class Agent:
                 else:
                     output_str = str(output) if output else ""
                 yield {"type": "tool_end", "name": name, "output": output_str}
-
-        # 流结束 → 输出最后剩余的缓冲（最终回答的正文）
-        for evt in content_buffer:
-            yield evt
 
         yield {"type": "done"}

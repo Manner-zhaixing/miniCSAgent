@@ -9,21 +9,24 @@
 uv sync
 
 # 启动服务（修改代码后自动重载）
-uv run uvicorn mini_cs_agent.main:create_app --factory --reload --port 8000
+uv run uvicorn mini_cs_agent.main:create_app --factory --reload --port 8080
 
 # 通过便捷入口脚本启动
 uv run python main.py
 
+# 打开前端界面
+open http://localhost:8080
+
 # 健康检查
-curl http://localhost:8000/api/v1/health
+curl http://localhost:8080/api/v1/health
 
 # 非流式消息（JSON 返回）
-curl -X POST 'http://localhost:8000/api/v1/chat?stream=false' \
+curl -X POST 'http://localhost:8080/api/v1/chat?stream=false' \
   -H "Content-Type: application/json" \
   -d '{"message": "Hello"}'
 
 # 流式消息（SSE，默认模式）
-curl -N -X POST http://localhost:8000/api/v1/chat \
+curl -N -X POST http://localhost:8080/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"message": "搜索最新的 AI 新闻"}'
 ```
@@ -62,6 +65,15 @@ curl -N -X POST http://localhost:8000/api/v1/chat \
 ### 路由中的 Agent 注入
 
 路由使用模块级全局变量 `_agent`，由 `init_router()` 设置。此函数在 `create_app()` 启动时调用。健康检查接口（`GET /api/v1/health`）不依赖 Agent。
+
+### 前端界面
+
+启动服务后访问 `http://localhost:8080` 即可使用前端对话界面。前端是纯 HTML/CSS/JS 单文件，位于 [front/index.html](front/index.html)，无需构建。功能：
+
+- SSE 流式消息实时渲染（`fetch` + `ReadableStream`）
+- 深度思考内容可折叠展示（`reasoning` 事件）
+- 工具调用状态标记（`tool_start` / `tool_end` 事件）
+- `GET /` 返回 `front/index.html`，`StaticFiles` 挂载在 `/static`
 
 ### 包结构
 
