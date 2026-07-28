@@ -8,6 +8,7 @@
 from collections.abc import AsyncIterator
 
 from langchain.agents import create_agent
+
 from langchain_deepseek import ChatDeepSeek
 
 from mini_cs_agent.core.config import Config
@@ -54,7 +55,7 @@ class Agent:
         return ""
 
     async def stream(self, message: str) -> AsyncIterator[dict]:
-        """流式调用：逐事件 yield，不做过滤，直接透传。
+        """流式调用：逐事件 yield，模型给什么就发什么，纯透传。
 
         yield 的事件格式：
           {"type": "reasoning",  "content": "..."}         — 模型深度思考（CoT）
@@ -63,8 +64,7 @@ class Agent:
           {"type": "tool_end",   "name": "...", "output": "..."} — 工具结束
           {"type": "done"}
 
-        注意：深度思考模式下，工具调用前可能出现冗余正文（CoT 的复述），
-        由前端根据后续是否出现 tool_start 来决定是否丢弃。
+        不做任何过滤。正文块的拆分/分隔由前端负责。
         """
         import json
 
@@ -82,25 +82,27 @@ class Agent:
                 content = getattr(chunk, "content", "")
                 if reasoning:
                     yield {"type": "reasoning", "content": reasoning}
-                elif content:
+                if content:
                     yield {"type": "token", "content": content}
 
             elif kind == "on_tool_start":
                 name = event.get("name", "unknown")
+                run_id = event.get("run_id", "")
                 tool_input = event.get("data", {}).get("input", {})
                 try:
                     safe_input = json.loads(json.dumps(tool_input, default=str))
                 except Exception:
                     safe_input = str(tool_input)
-                yield {"type": "tool_start", "name": name, "input": safe_input}
+                yield {"type": "tool_start", "name": name, "input": safe_input, "run_id": run_id}
 
             elif kind == "on_tool_end":
                 name = event.get("name", "unknown")
+                run_id = event.get("run_id", "")
                 output = event.get("data", {}).get("output", "")
                 if hasattr(output, "content"):
                     output_str = str(output.content)
                 else:
                     output_str = str(output) if output else ""
-                yield {"type": "tool_end", "name": name, "output": output_str}
+                yield {"type": "tool_end", "name": name, "output": output_str, "run_id": run_id}
 
         yield {"type": "done"}

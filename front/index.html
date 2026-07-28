@@ -44,15 +44,28 @@
     padding: 8px 10px; font-size: 13px; color: #6b7280; max-height: 200px; overflow-y: auto;
     white-space: pre-wrap; line-height: 1.5; border-top: 1px solid #e5e7eb;
   }
-  .tool-badge {
-    display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 4px;
-    margin: 4px 0;
+  .tool-block {
+    border: 1px solid #e5e7eb; border-radius: 8px; margin: 6px 0; overflow: hidden; font-size: 13px;
   }
-  .tool-badge.start { background: #fef3c7; color: #92400e; }
-  .tool-badge.end   { background: #d1fae5; color: #065f46; }
-  .tool-output {
-    font-size: 12px; color: #6b7280; margin-top: 2px; max-height: 120px; overflow-y: auto;
-    white-space: pre-wrap; border-left: 2px solid #d1d5db; padding-left: 8px;
+  .tool-block.running { border-left: 3px solid #f59e0b; background: #fffbeb; }
+  .tool-block.done    { border-left: 3px solid #10b981; background: #f0fdf4; }
+  .tool-header { padding: 6px 10px; display: flex; align-items: center; gap: 6px; }
+  .tool-icon  { font-size: 14px; flex-shrink: 0; }
+  .tool-name  { font-weight: 600; color: #374151; }
+  .tool-args  { color: #9ca3af; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .tool-status { margin-left: auto; font-size: 11px; font-weight: 500; flex-shrink: 0; }
+  .tool-block.running .tool-status { color: #d97706; }
+  .tool-block.done .tool-status    { color: #059669; }
+  .tool-spinner {
+    width: 12px; height: 12px; border: 2px solid #fcd34d;
+    border-top-color: #f59e0b; border-radius: 50%;
+    animation: tool-spin .6s linear infinite; flex-shrink: 0;
+  }
+  @keyframes tool-spin { to { transform: rotate(360deg); } }
+  .tool-result {
+    padding: 6px 10px; font-size: 12px; color: #6b7280; line-height: 1.5;
+    max-height: 120px; overflow-y: auto; white-space: pre-wrap;
+    border-top: 1px solid #e5e7eb; background: #fff;
   }
   footer {
     padding: 12px 16px; background: #fff; border-top: 1px solid #e5e7eb;
@@ -74,7 +87,28 @@
   .typing { display: inline-block; width: 6px; height: 14px; background: #3b82f6;
     animation: blink .6s infinite; vertical-align: middle; margin-left: 2px; }
   @keyframes blink { 50% { opacity: 0; } }
+  /* markdown 内容样式 */
+  .bubble .md-content p { margin: 4px 0; }
+  .bubble .md-content p:first-child { margin-top: 0; }
+  .bubble .md-content p:last-child { margin-bottom: 0; }
+  .bubble .md-content code {
+    background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 0.9em;
+  }
+  .bubble .md-content pre {
+    background: #f3f4f6; border-radius: 6px; padding: 8px 12px; overflow-x: auto;
+    font-size: 13px; line-height: 1.5; margin: 6px 0;
+  }
+  .bubble .md-content pre code { background: none; padding: 0; }
+  .bubble .md-content ul, .bubble .md-content ol { padding-left: 20px; margin: 4px 0; }
+  .bubble .md-content blockquote {
+    border-left: 3px solid #d1d5db; padding-left: 10px; color: #6b7280; margin: 6px 0;
+  }
+  .bubble .md-content a { color: #3b82f6; }
+  .msg.user .bubble .md-content code { background: rgba(255,255,255,.2); }
+  .msg.user .bubble .md-content pre { background: rgba(255,255,255,.15); }
+  .msg.user .bubble .md-content a { color: #bfdbfe; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 <header><span class="dot"></span> Mini CS Agent</header>
@@ -105,15 +139,13 @@ async function send() {
 
   let reasoningEl = null;    // 当前活跃的思考块 DOM
   let tokenEl = null;        // 正文文本块 DOM
+  let tokenText = '';        // 当前正文块累计文本（用于 markdown 渲染）
+  let toolBlocks = new Map(); // run_id → 工具调用块 DOM
   // rAF 批量渲染
   let reasonBuf = '';
   let tokenBuf = '';
   let rafId = null;
   let needScroll = false;
-  // 过滤：深度思考模式下，第一个 tool call 之前的 token 可能是推理复述，需缓冲
-  let hasReasoning = false;  // 当前轮是否已有 reasoning
-  let hasToolCall = false;   // 是否已经历过工具调用
-  let preToolTokens = '';    // 工具调用前缓冲的 token（可能需丢弃）
 
   function flushDOM() {
     if (reasoningEl && reasonBuf) {
@@ -121,8 +153,9 @@ async function send() {
       reasonBuf = '';
     }
     if (tokenEl && tokenBuf) {
-      tokenEl.textContent += tokenBuf;
+      tokenText += tokenBuf;
       tokenBuf = '';
+      tokenEl.innerHTML = '<div class="md-content">' + marked.parse(tokenText) + '</div>';
     }
     if (needScroll) {
       chat.scrollTop = chat.scrollHeight;
@@ -162,54 +195,42 @@ async function send() {
 
         switch (event.type) {
           case 'reasoning':
+            // 开始新推理 → 关闭当前正文块，后续 token 将创建新块
+            tokenEl = null;
+            tokenText = '';
             if (!reasoningEl) {
               reasoningEl = addThinking(agentEl);
             }
-            hasReasoning = true;
             reasonBuf += event.content;
             scheduleFlush();
             break;
           case 'token':
-            if (!hasToolCall && hasReasoning) {
-              // 工具调用前出现了 reasoning，当前 token 可能是推理复述 → 缓冲不渲染
-              preToolTokens += event.content;
-            } else {
-              // 没有 reasoning 或已过工具调用阶段 → 正常渲染
-              if (!tokenEl) {
-                tokenEl = addTokenArea(agentEl);
-              }
-              tokenBuf += event.content;
-              needScroll = true;
-              scheduleFlush();
+            // tokenEl 为 null 时创建新正文块（reasoning/tool 会将其置 null）
+            if (!tokenEl) {
+              tokenEl = addTokenArea(agentEl);
             }
+            tokenBuf += event.content;
+            needScroll = true;
+            scheduleFlush();
             break;
           case 'tool_start':
-            // 工具调用出现 → 丢弃之前缓冲的 token（推理复述），关闭当前思考块
-            preToolTokens = '';
-            hasReasoning = false;
-            hasToolCall = true;
+            // 开始工具调用 → 关闭当前正文块和思考面板，创建工具卡片
+            tokenEl = null;
+            tokenText = '';
             reasoningEl = null;
-            addToolBadge(agentEl, 'start', `🔍 调用 ${event.name}(${JSON.stringify(event.input).slice(0, 80)}…)`);
+            toolBlocks.set(event.run_id, addToolBlock(agentEl, event.name, event.input));
             needScroll = true;
             break;
           case 'tool_end':
-            addToolBadge(agentEl, 'end', `✅ ${event.name} 完成`);
-            needScroll = true;
-            if (event.output) {
-              const details = document.createElement('details');
-              details.className = 'thinking';
-              details.innerHTML = '<summary>📋 查看结果</summary><div class="body"></div>';
-              details.querySelector('.body').textContent = event.output.slice(0, 2000);
-              agentEl.querySelector('.bubble').appendChild(details);
+            // 完成工具调用 → 按 run_id 匹配对应的工具卡片
+            const tb = toolBlocks.get(event.run_id);
+            if (tb) {
+              finishToolBlock(tb, event.name, event.output);
+              toolBlocks.delete(event.run_id);
             }
+            needScroll = true;
             break;
           case 'done':
-            // 无工具调用的直接回答：缓冲的 token 是最终回复，正常渲染
-            if (preToolTokens) {
-              if (!tokenEl) tokenEl = addTokenArea(agentEl);
-              tokenBuf += preToolTokens;
-              preToolTokens = '';
-            }
             // flush 剩余 buffer，移除打字光标
             if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
             flushDOM();
@@ -267,22 +288,50 @@ function addThinking(parent) {
 
 function addTokenArea(parent) {
   const bubble = parent.querySelector('.bubble');
-  // remove typing indicator
   const cursor = bubble.querySelector('.typing');
   if (cursor) cursor.remove();
 
   const div = document.createElement('div');
-  div.style.whiteSpace = 'pre-wrap';
   bubble.appendChild(div);
   return div;
 }
 
-function addToolBadge(parent, cls, text) {
+function addToolBlock(parent, name, input) {
   const bubble = parent.querySelector('.bubble');
-  const span = document.createElement('span');
-  span.className = 'tool-badge ' + cls;
-  span.textContent = text;
-  bubble.appendChild(span);
+  const block = document.createElement('div');
+  block.className = 'tool-block running';
+  const icon = getToolIcon(name);
+  const args = typeof input === 'string' ? input : JSON.stringify(input).slice(0, 100);
+  block.innerHTML =
+    `<div class="tool-header">` +
+    `<span class="tool-icon">${icon}</span>` +
+    `<span class="tool-name">${escapeHtml(name)}</span>` +
+    `<span class="tool-args">${escapeHtml(args)}</span>` +
+    `<span class="tool-spinner"></span>` +
+    `<span class="tool-status">执行中</span>` +
+    `</div>`;
+  bubble.appendChild(block);
+  return block;
+}
+
+function finishToolBlock(block, name, output) {
+  block.classList.remove('running');
+  block.classList.add('done');
+  const spinner = block.querySelector('.tool-spinner');
+  if (spinner) spinner.remove();
+  const status = block.querySelector('.tool-status');
+  if (status) status.textContent = '✓ 完成';
+  if (output) {
+    const result = document.createElement('div');
+    result.className = 'tool-result';
+    result.textContent = output.slice(0, 500);
+    block.appendChild(result);
+  }
+}
+
+function getToolIcon(name) {
+  const icons = { web_search: '🔍', default: '🔧' };
+  return icons[name] || icons.default;
 }
 
 function escapeHtml(s) {
