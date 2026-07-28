@@ -9,7 +9,7 @@ class Config:
     """读取项目根目录 .env 文件配置。"""
     DEEPSEEK_API_KEY: str
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    MODEL_NAME: str = "deepseek-chat"
+    MODEL_NAME: str = "deepseek-v4-pro"
     EXA_API_KEY: str = ""
     ENABLE_THINKING: bool = True  # 启用 DeepSeek 深度思考（reasoning_content）
 
@@ -35,7 +35,7 @@ def load_config() -> Config:
     return Config(
         DEEPSEEK_API_KEY=api_key,
         DEEPSEEK_BASE_URL=values.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        MODEL_NAME=values.get("MODEL_NAME", "deepseek-chat"),
+        MODEL_NAME=values.get("MODEL_NAME", "deepseek-v4-pro"),
         EXA_API_KEY=values.get("EXA_API_KEY", ""),
         ENABLE_THINKING=values.get("ENABLE_THINKING", "true").lower() not in ("false", "0", "no"),
     )

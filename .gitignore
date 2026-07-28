@@ -14,3 +14,5 @@ wheels/
 
 # IDE files
 .idea/
+
+test/
