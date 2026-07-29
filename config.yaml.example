@@ -1,0 +1,65 @@
+# Select one key from the models mapping below.
+active_model: deepseek
+
+models:
+  deepseek:
+    provider: deepseek
+    model: deepseek-v4-pro
+    api_key: ""
+    base_url: https://api.deepseek.com
+    streaming: true
+    options:
+      extra_body:
+        thinking:
+          type: enabled
+
+  qwen:
+    # OpenAI-compatible providers use LangChain's openai integration.
+    provider: openai
+    model: qwen-plus
+    api_key: ""
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    streaming: true
+    options: {}
+
+  kimi:
+    provider: openai
+    model: your-kimi-model
+    api_key: ""
+    base_url: https://api.moonshot.cn/v1
+    streaming: true
+    options: {}
+
+  glm:
+    provider: openai
+    model: your-glm-model
+    api_key: ""
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    streaming: true
+    options: {}
+
+  openai:
+    provider: openai
+    model: your-gpt-model
+    api_key: ""
+    base_url: https://api.openai.com/v1
+    streaming: true
+    options: {}
+
+  claude:
+    provider: anthropic
+    model: your-claude-model
+    api_key: ""
+    base_url: https://api.anthropic.com
+    streaming: true
+    options:
+      max_tokens: 4096
+
+web_search:
+  enabled: false
+  provider: exa
+  api_key: ""
+
+server:
+  host: 0.0.0.0
+  port: 8000
