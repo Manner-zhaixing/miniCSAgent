@@ -9,6 +9,7 @@ ENV PYTHONUNBUFFERED=1 \
 COPY pyproject.toml uv.lock README.md ./
 COPY main.py ./
 COPY src ./src
+COPY front ./front
 
 RUN uv sync --locked --no-dev
 

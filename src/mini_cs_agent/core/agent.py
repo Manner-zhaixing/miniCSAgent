@@ -1,41 +1,63 @@
-"""ReAct Agent —— 基于 LangChain create_agent 的智能体，由 DeepSeek 驱动。
+"""ReAct agent backed by any configured LangChain chat model."""
 
-支持：
-- 非流式调用：agent.run(message) → 完整回复
-- 流式调用：agent.stream(message) → 逐事件 yield（含深度思考过程）
-"""
-
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 from langchain.agents import create_agent
+from langchain_core.language_models import BaseChatModel
 
-from langchain_deepseek import ChatDeepSeek
-
-from mini_cs_agent.core.config import Config
 from mini_cs_agent.core.prompts.agent_system import AGENT_SYSTEM_PROMPT
 from mini_cs_agent.core.tools import ALL_TOOLS
-from mini_cs_agent.core.tools.web_search import init_search
+
+
+def _content_events(content: Any) -> Iterator[dict[str, str]]:
+    """Normalize provider-specific content into the public SSE event format."""
+    if isinstance(content, str):
+        if content:
+            yield {"type": "token", "content": content}
+        return
+
+    if not isinstance(content, list):
+        return
+
+    for block in content:
+        if isinstance(block, str):
+            if block:
+                yield {"type": "token", "content": block}
+            continue
+        if not isinstance(block, dict):
+            continue
+
+        block_type = block.get("type", "")
+        if block_type in {"thinking", "reasoning"}:
+            reasoning = block.get("thinking") or block.get("reasoning") or block.get("text")
+            if reasoning:
+                yield {"type": "reasoning", "content": str(reasoning)}
+        elif block_type in {"text", "output_text"}:
+            text = block.get("text")
+            if text:
+                yield {"type": "token", "content": str(text)}
+
+
+def _message_text(message: Any) -> str:
+    """Extract plain response text from a LangChain message."""
+    text = getattr(message, "text", None)
+    if isinstance(text, str) and text:
+        return text
+
+    parts = [
+        event["content"]
+        for event in _content_events(getattr(message, "content", ""))
+        if event["type"] == "token"
+    ]
+    return "".join(parts)
 
 
 class Agent:
-    """ReAct Agent —— 可以调用工具来完成任务。"""
+    """A provider-independent LangChain ReAct agent."""
 
-    def __init__(self, config: Config):
-        init_search(config)
-
-        # 启用 DeepSeek 深度思考（reasoning_content）
-        extra_body = {}
-        if config.ENABLE_THINKING:
-            extra_body = {"thinking": {"type": "enabled"}}
-
-        self.llm = ChatDeepSeek(
-            model=config.MODEL_NAME,
-            api_key=config.DEEPSEEK_API_KEY,
-            api_base=config.DEEPSEEK_BASE_URL,
-            streaming=True,
-            extra_body=extra_body,
-        )
-
+    def __init__(self, llm: BaseChatModel):
+        self.llm = llm
         self.agent = create_agent(
             model=self.llm,
             tools=ALL_TOOLS,
@@ -43,29 +65,18 @@ class Agent:
         )
 
     async def run(self, message: str) -> str:
-        """非流式调用：发送消息，返回完整回复文本。"""
-        result = await self.agent.ainvoke(
-            {"messages": [("user", message)]}
-        )
+        """Send one message and return the complete assistant response."""
+        result = await self.agent.ainvoke({"messages": [("user", message)]})
         messages = result.get("messages", [])
-        for msg in reversed(messages):
-            content = getattr(msg, "content", "")
-            if content and getattr(msg, "type", "") == "ai":
-                return content
+        for response_message in reversed(messages):
+            if getattr(response_message, "type", "") == "ai":
+                content = _message_text(response_message)
+                if content:
+                    return content
         return ""
 
     async def stream(self, message: str) -> AsyncIterator[dict]:
-        """流式调用：逐事件 yield，模型给什么就发什么，纯透传。
-
-        yield 的事件格式：
-          {"type": "reasoning",  "content": "..."}         — 模型深度思考（CoT）
-          {"type": "token",      "content": "..."}         — 回复文本 token
-          {"type": "tool_start", "name": "...", "input": {...}}  — 工具开始
-          {"type": "tool_end",   "name": "...", "output": "..."} — 工具结束
-          {"type": "done"}
-
-        不做任何过滤。正文块的拆分/分隔由前端负责。
-        """
+        """Stream normalized model and tool events."""
         import json
 
         async for event in self.agent.astream_events(
@@ -78,12 +89,13 @@ class Agent:
                 chunk = event.get("data", {}).get("chunk")
                 if chunk is None:
                     continue
+
                 reasoning = chunk.additional_kwargs.get("reasoning_content", "")
-                content = getattr(chunk, "content", "")
                 if reasoning:
                     yield {"type": "reasoning", "content": reasoning}
-                if content:
-                    yield {"type": "token", "content": content}
+
+                for content_event in _content_events(getattr(chunk, "content", "")):
+                    yield content_event
 
             elif kind == "on_tool_start":
                 name = event.get("name", "unknown")
@@ -93,16 +105,23 @@ class Agent:
                     safe_input = json.loads(json.dumps(tool_input, default=str))
                 except Exception:
                     safe_input = str(tool_input)
-                yield {"type": "tool_start", "name": name, "input": safe_input, "run_id": run_id}
+                yield {
+                    "type": "tool_start",
+                    "name": name,
+                    "input": safe_input,
+                    "run_id": run_id,
+                }
 
             elif kind == "on_tool_end":
                 name = event.get("name", "unknown")
                 run_id = event.get("run_id", "")
                 output = event.get("data", {}).get("output", "")
-                if hasattr(output, "content"):
-                    output_str = str(output.content)
-                else:
-                    output_str = str(output) if output else ""
-                yield {"type": "tool_end", "name": name, "output": output_str, "run_id": run_id}
+                output_str = str(output.content) if hasattr(output, "content") else str(output or "")
+                yield {
+                    "type": "tool_end",
+                    "name": name,
+                    "output": output_str,
+                    "run_id": run_id,
+                }
 
         yield {"type": "done"}

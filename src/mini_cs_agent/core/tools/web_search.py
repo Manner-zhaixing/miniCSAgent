@@ -11,30 +11,31 @@ API 文档: https://docs.exa.ai/reference/search
 
 from langchain_core.tools import tool
 
-from mini_cs_agent.core.config import Config
+from mini_cs_agent.core.config import WebSearchConfig
 
-# 延迟初始化，避免没装 SDK / 未配置 Key 时启动就报错
+# 延迟初始化，仅在模型实际调用搜索工具时创建客户端
 _exa_client = None
-_config: Config | None = None
+_config: WebSearchConfig | None = None
 
 
-def init_search(config: Config) -> None:
-    """注入配置（由 Agent 初始化时调用）。"""
-    global _config
+def init_search(config: WebSearchConfig) -> None:
+    """注入应用启动时已经加载并校验过的搜索配置。"""
+    global _config, _exa_client
     _config = config
+    _exa_client = None
 
 
 def _get_exa_client():
     """获取或创建 Exa client（单例，延迟初始化）。"""
     global _exa_client
     if _exa_client is None:
-        api_key = _config.EXA_API_KEY if _config else ""
-        if not api_key:
+        if _config is None or not _config.enabled:
             raise ValueError(
-                "EXA_API_KEY not configured. "
-                "Add EXA_API_KEY to your .env file. "
+                "Web search is disabled in config.yaml. "
                 "Get a free API key (1,000 requests/month) at https://dashboard.exa.ai"
             )
+
+        api_key = _config.api_key.get_secret_value()
         from exa_py import Exa
 
         _exa_client = Exa(api_key=api_key)
@@ -92,7 +93,7 @@ def web_search(query: str, count: int = 5) -> str:
         if "401" in error_msg or "unauthorized" in error_msg.lower():
             return (
                 "Error: Exa API key is invalid. "
-                "Check your .env file, get a valid key at https://dashboard.exa.ai"
+                "Check config.yaml, get a valid key at https://dashboard.exa.ai"
             )
         if "402" in error_msg or "quota" in error_msg.lower() or "limit" in error_msg.lower():
             return (

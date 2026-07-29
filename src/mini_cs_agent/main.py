@@ -6,18 +6,24 @@ from fastapi.staticfiles import StaticFiles
 
 from mini_cs_agent.core.config import load_config
 from mini_cs_agent.core.agent import Agent
+from mini_cs_agent.core.model_factory import create_llm
+from mini_cs_agent.core.tools.web_search import init_search
 from mini_cs_agent.api.routes import init_router
 
 
 def create_app() -> FastAPI:
     config = load_config()
-    agent = Agent(config)
+    llm = create_llm(config.selected_model)
+    init_search(config.web_search)
+    agent = Agent(llm)
 
     app = FastAPI(
         title="Mini CS Agent",
-        description="A minimal LangGraph + FastAPI agent demo powered by DeepSeek",
+        description="A minimal LangGraph + FastAPI multi-model agent demo",
         version="0.1.0",
     )
+    app.state.config = config
+    app.state.agent = agent
 
     router = init_router(agent)
     app.include_router(router)
